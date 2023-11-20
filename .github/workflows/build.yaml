@@ -1,0 +1,80 @@
+name: Build k8s
+run-name: Build k8s ${{ github.event.inputs.tag }}-kwok.${{ github.event.inputs.build }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag: 
+        description: 'tag'
+        required: true
+        type: string
+      build:
+        description: 'build'
+        required: false
+        type: number
+        default: 0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      BUILD_PLATFORMS: "darwin/amd64 darwin/arm64 windows/arm64 windows/amd64"
+      KUBE_WHAT: "cmd/kubectl cmd/kube-apiserver cmd/kube-controller-manager cmd/kube-scheduler"
+      KUBE_VERSION: "${{ github.event.inputs.tag }}"
+      KWOK_KUBE_VERSION: "${{ github.event.inputs.tag }}-kwok.${{ github.event.inputs.build }}"
+      REPO: "${{ github.repository }}"
+    steps:
+      - name: Check
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: |
+          if gh -R "${REPO}" release view "${KWOK_KUBE_VERSION}-windows-amd64"; then
+            echo "Release ${KWOK_KUBE_VERSION}-windows-amd64 already exists"
+            exit 1
+          fi
+
+      - name: Checkout k8s ${{ env.KUBE_VERSION }}
+        run: |
+          wget "https://dl.k8s.io/${KUBE_VERSION}/kubernetes-src.tar.gz" -O - | tar xz
+
+          GO_VERSION=1.$(cat ./hack/lib/golang.sh | grep 'minimum_go_version=go1' | awk -F '=go1.' '{print $2}' | awk -F '.' '{print $1}')
+          echo "GO_VERSION=${GO_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Setup Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v4
+        with:
+          go-version: '${{ env.GO_VERSION }}'
+
+      - name: Filter platforms
+        run: |
+          BUILD_PLATFORMS="$(echo -e "$(go tool dist list)\n${BUILD_PLATFORMS// /$'\n'}" | sort | uniq -d | tr '\n' ' ')"
+          echo "KUBE_BUILD_PLATFORMS=${BUILD_PLATFORMS}" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          KUBE_GIT_VERSION=${KWOK_KUBE_VERSION} make KUBE_BUILD_PLATFORMS="${KUBE_BUILD_PLATFORMS}" WHAT="${KUBE_WHAT}"
+
+      - name: Release
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: |
+          for platform in ${KUBE_BUILD_PLATFORMS}; do
+            platform_suffix="${platform//\//-}"
+            cat <<ALL | gh -R "${REPO}" release create "${KWOK_KUBE_VERSION}-${platform_suffix}" _output/local/bin/${platform}/* --title "${KWOK_KUBE_VERSION} ${platform%/*} ${platform#*/}" --notes-file -
+          Automated release k8s by [kwok-ci](https://github.com/${REPO}/actions/runs/${{ github.run_id }})
+          \`\`\` shell
+          cat <<EOF >> ~/.kwok/kwok.yaml
+          ---
+          kind: KwokctlConfiguration
+          apiVersion: config.kwok.x-k8s.io/v1alpha1
+          options:
+            kubeBinaryPrefix: https://github.com/${REPO}/releases/download/${KWOK_KUBE_VERSION}-${platform_suffix}
+          ---
+          EOF
+          \`\`\`
+          ALL
+          done
