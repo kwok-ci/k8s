@@ -26,6 +26,6 @@ jobs:
               # sleep 10 seconds to avoid rate limit
               sleep 10
             else
-              echo "Skip v1.${release}.${latest_patch[${release}]}"
+              echo "Skip ${line}"
             fi
           done < <(gh api '/repos/kubernetes/kubernetes/releases?per_page=100&page=1' --jq '.[] | select( .tag_name | contains("-") | not ) | .tag_name')
