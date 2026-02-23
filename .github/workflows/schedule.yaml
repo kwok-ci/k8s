@@ -17,35 +17,15 @@ jobs:
           REPO: "${{ github.repository }}"
           GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         run: |
-          # get latest patch version for each minor release
-          declare -A latest_patch
-          while IFS= read -r line; do
-            IFS='.' read -ra arr <<<"$line"
-            release="${arr[1]}"
-            patch="${arr[2]}"
-            if [[ -z "${latest_patch[${release}]}" || "${patch}" -gt "${latest_patch[$release]}" ]]; then
-              latest_patch["${release}"]="${patch}"
-            fi
-          done < <(gh api '/repos/kubernetes/kubernetes/releases?per_page=100&page=1' --jq '.[] | select( .tag_name | contains("-") | not ) | .tag_name')
-
-          # get releases
-          releases=()
-          for release in "${!latest_patch[@]}"; do
-            releases+=("${release}")
-          done
-
-          # sort releases by version
-          mapfile -t releases < <(printf '%s\n' "${releases[@]}" | sort --version-sort)
-
           # trigger build
-          for release in "${releases[@]}"; do
-            if ! gh -R "${REPO}" release view "v1.${release}.${latest_patch[${release}]}-kwok.0-windows-amd64" >/dev/null 2>&1; then
-              echo "Trigger build v1.${release}.${latest_patch[${release}]}"
-              gh -R "${REPO}" workflow run build.yaml -F tag=v1.${release}.${latest_patch[${release}]}
+          while IFS= read -r line; do
+            if ! gh -R "${REPO}" release view "${line}-kwok.0-windows-amd64" >/dev/null 2>&1; then
+              echo "Trigger build ${line}"
+              gh -R "${REPO}" workflow run build.yaml -F tag=${line}
 
               # sleep 10 seconds to avoid rate limit
               sleep 10
             else
               echo "Skip v1.${release}.${latest_patch[${release}]}"
             fi
-          done
+          done < <(gh api '/repos/kubernetes/kubernetes/releases?per_page=100&page=1' --jq '.[] | select( .tag_name | contains("-") | not ) | .tag_name')
